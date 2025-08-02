@@ -1,0 +1,23 @@
+from pythainlp.util import thai_strftime
+from datetime import datetime, timedelta
+
+def extract_event_info(text):
+    # ใส่เงื่อนไขวิเคราะห์ง่าย ๆ เช่นหาคำว่า “พรุ่งนี้” “บ่ายสอง”
+    if "พรุ่งนี้" in text:
+        date = datetime.now() + timedelta(days=1)
+    elif "วันนี้" in text:
+        date = datetime.now()
+    else:
+        date = datetime.now()  # ตัวอย่างเท่านั้น
+
+    # สมมุติเจอคำว่า “บ่ายสอง”
+    if "บ่ายสอง" in text:
+        time_str = "14:00"
+    else:
+        time_str = "09:00"
+
+    title = text.split("วัน")[0]  # เอาสิ่งที่อยู่หน้าคำว่า “วัน”
+    return {
+        "title": title.strip(),
+        "datetime": datetime.strptime(f"{date.date()} {time_str}", "%Y-%m-%d %H:%M")
+    }
