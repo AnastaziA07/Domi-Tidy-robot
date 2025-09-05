@@ -1,0 +1,673 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>micro:bit Voice Calendar</title>
+    <meta charset="utf-8">
+    <style>
+        body {
+            font-family: 'Sarabun', Arial, sans-serif;
+            margin: 20px;
+            background: #f5f5f5;
+        }
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            background: white;
+            padding: 20px;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        .status {
+            padding: 15px;
+            border-radius: 8px;
+            margin: 10px 0;
+            font-weight: bold;
+            text-align: center;
+        }
+        .status.ready { background: #e8f5e8; color: #2d5a3d; }
+        .status.connected { background: #e3f2fd; color: #1565c0; }
+        .status.listening { background: #fff3e0; color: #e65100; }
+        .status.error { background: #ffebee; color: #c62828; }
+        .status.success { background: #e8f5e8; color: #2e7d32; }
+        
+        .buttons {
+            display: flex;
+            gap: 10px;
+            margin: 20px 0;
+            flex-wrap: wrap;
+        }
+        .btn {
+            padding: 12px 20px;
+            font-size: 16px;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-family: inherit;
+            transition: all 0.3s;
+        }
+        .btn:hover { transform: translateY(-2px); box-shadow: 0 4px 8px rgba(0,0,0,0.2); }
+        .btn.primary { background: #1976d2; color: white; }
+        .btn.danger { background: #d32f2f; color: white; }
+        .btn.secondary { background: #757575; color: white; }
+        
+        .info-box {
+            background: #f0f0f0;
+            padding: 15px;
+            margin: 10px 0;
+            border-radius: 8px;
+            border-left: 4px solid #1976d2;
+        }
+        .examples-box {
+            background: #e8f4fd;
+            padding: 15px;
+            margin: 10px 0;
+            border-radius: 8px;
+            border-left: 4px solid #2196f3;
+        }
+        .result-box {
+            margin-top: 20px;
+            padding: 15px;
+            background: #e8f5e8;
+            border-radius: 8px;
+            border-left: 4px solid #4caf50;
+        }
+        .debug-box {
+            margin-top: 10px;
+            padding: 10px;
+            background: #f5f5f5;
+            border-radius: 5px;
+            font-family: monospace;
+            font-size: 12px;
+            color: #666;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🎤 ระบบรับคำสั่งเสียง Google Calendar</h1>
+        
+        <div id="status" class="status ready">พร้อมใช้งาน - กรุณาเชื่อมต่อ micro:bit</div>
+        
+        <div class="buttons">
+            <button onclick="connectMicrobit()" class="btn primary">
+                🔗 เชื่อมต่อ micro:bit
+            </button>
+            <button onclick="disconnectMicrobit()" class="btn danger">
+                ❌ ตัดการเชื่อมต่อ
+            </button>
+            <button onclick="startListening()" class="btn secondary">
+                🎤 ทดสอบฟังเสียง
+            </button>
+            <button onclick="testWebhook()" class="btn secondary">
+                🔧 ทดสอบ Zapier
+            </button>
+            <button onclick="testVoiceCommandData()" class="btn secondary">
+                🧪 ทดสอบคำสั่งเสียง
+            </button>
+        </div>
+        
+        <div class="info-box">
+            <h3>วิธีใช้งาน:</h3>
+            <p><strong>ปุ่ม A:</strong> เริ่มฟังเสียง (จะนับถอยหลัง 5 วินาที)</p>
+            <p><strong>ปุ่ม B:</strong> ยกเลิกการทำงาน</p>
+            <p><strong>ปุ่ม A+B:</strong> ทดสอบการเชื่อมต่อ</p>
+        </div>
+        
+        <div class="examples-box">
+            <h3>ตัวอย่างคำสั่ง:</h3>
+            <ul>
+                <li>"จดประชุมทีมพรุ่งนี้เวลา 2 โมงบ่าย"</li>
+                <li>"จดนัดหมายลูกค้าวันจันทร์เวลา 10 โมงเช้า"</li>
+                <li>"แก้ไขประชุมพรุ่งนี้เปลี่ยนเป็น 3 โมง"</li>
+                <li>"ลบนัดหมายลูกค้าวันจันทร์"</li>
+            </ul>
+        </div>
+        
+        <div id="result"></div>
+        <div id="debug"></div>
+    </div>
+    
+    <script>
+        // Global variables
+        let port = null;
+        let reader = null;
+        let recognition = null;
+        let isConnected = false;
+        
+        // อัพเดท status display
+        function updateStatus(message, type = 'ready') {
+            const statusEl = document.getElementById('status');
+            statusEl.innerHTML = message;
+            statusEl.className = `status ${type}`;
+        }
+        
+        // แสดงข้อมูล debug
+        function showDebug(message) {
+            const debugEl = document.getElementById('debug');
+            const timestamp = new Date().toLocaleTimeString('th-TH');
+            debugEl.innerHTML = `<div class="debug-box">[${timestamp}] ${message}</div>`;
+        }
+        
+        // ทดสอบ Webhook
+        async function testWebhook() {
+            const testData = {
+                action: 'create',
+                title: 'ทดสอบระบบ',
+                start_datetime: new Date().toISOString(),
+                end_datetime: new Date(Date.now() + 60*60*1000).toISOString(),
+                timezone: 'Asia/Bangkok',
+                description: 'ทดสอบการเชื่อมต่อ Zapier',
+                duration_minutes: 60
+            };
+            
+            updateStatus('กำลังทดสอบ Zapier...', 'listening');
+            
+            try {
+                const response = await fetch('https://hooks.zapier.com/hooks/catch/24425708/uhfcmta/', {
+                    method: 'POST',
+                    mode: 'no-cors',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify(testData)
+                });
+                
+                updateStatus('ส่งข้อมูลทดสอบไปยัง Zapier แล้ว (no-cors mode)', 'success');
+                showDebug('ทดสอบส่งข้อมูล: ' + JSON.stringify(testData, null, 2));
+                
+            } catch (error) {
+                console.error('Test webhook error:', error);
+                updateStatus('ทดสอบ Zapier ล้มเหลว: ' + error.message, 'error');
+                showDebug('Error: ' + error.message);
+            }
+        }
+        
+        // เพิ่มปุ่มทดสอบเปรียบเทียบ
+        function testVoiceCommandData() {
+            const testCommand = "จดประชุมทีมพรุ่งนี้เวลา 2 โมงบ่าย";
+            updateStatus('กำลังทดสอบการประมวลผลคำสั่งเสียง...', 'listening');
+            
+            const eventData = parseCalendarCommand(testCommand);
+            showDebug('ข้อมูลที่ประมวลผลได้: ' + JSON.stringify(eventData, null, 2));
+            
+            // สร้างปุ่มส่งข้อมูลแบบ safe
+            const eventDataJson = JSON.stringify(eventData);
+            
+            document.getElementById('result').innerHTML = `
+                <div class="result-box">
+                    <h4>🧪 ทดสอบการประมวลผลคำสั่ง</h4>
+                    <strong>คำสั่งทดสอบ:</strong> "${testCommand}"<br>
+                    <strong>ข้อมูลที่ได้:</strong><br>
+                    <pre style="background: #f5f5f5; padding: 10px; border-radius: 4px; font-size: 12px;">${JSON.stringify(eventData, null, 2)}</pre>
+                    <button onclick="sendToZapier(${eventDataJson.replace(/"/g, '&quot;')})" 
+                            class="btn primary" style="margin-top: 10px;">
+                        📤 ส่งข้อมูลนี้ไป Zapier
+                    </button>
+                </div>
+            `;
+            
+            // เก็บข้อมูลไว้ใน global variable เพื่อใช้ใน onclick
+            window.testEventData = eventData;
+            
+            // ปรับปุ่มให้ใช้ global variable
+            document.querySelector('.result-box button').onclick = () => sendToZapier(window.testEventData);
+            
+            updateStatus('ประมวลผลคำสั่งเสร็จสิ้น', 'success');
+        }
+        
+        // เชื่อมต่อ micro:bit
+        async function connectMicrobit() {
+            try {
+                if (!('serial' in navigator)) {
+                    updateStatus('บราวเซอร์ไม่รองรับ Web Serial API', 'error');
+                    showDebug('Web Serial API ไม่รองรับ - ใช้ Chrome หรือ Edge แทน');
+                    return;
+                }
+                
+                port = await navigator.serial.requestPort();
+                await port.open({ baudRate: 115200 });
+                
+                updateStatus('เชื่อมต่อ micro:bit สำเร็จ!', 'connected');
+                isConnected = true;
+                
+                const textDecoder = new TextDecoderStream();
+                const readableStreamClosed = port.readable.pipeTo(textDecoder.writable);
+                reader = textDecoder.readable.getReader();
+                
+                readSerialData();
+                
+            } catch (error) {
+                console.error('Connection error:', error);
+                updateStatus('ไม่สามารถเชื่อมต่อ micro:bit ได้: ' + error.message, 'error');
+                showDebug('Connection Error: ' + error.message);
+                isConnected = false;
+            }
+        }
+        
+        // อ่านข้อมูลจาก Serial
+        async function readSerialData() {
+            try {
+                while (isConnected && reader) {
+                    const { value, done } = await reader.read();
+                    if (done) break;
+                    
+                    console.log('Received from micro:bit:', value);
+                    showDebug('รับข้อมูลจาก micro:bit: ' + value);
+                    
+                    if (value.includes('START_LISTENING')) {
+                        updateStatus('micro:bit พร้อมฟังเสียง...', 'listening');
+                        startListening();
+                        
+                    } else if (value.includes('STOP_LISTENING')) {
+                        updateStatus('หยุดฟังเสียงแล้ว', 'ready');
+                        stopListening();
+                        
+                    } else if (value.includes('CANCEL')) {
+                        updateStatus('ยกเลิกการทำงาน', 'ready');
+                        stopListening();
+                        
+                    } else if (value.includes('TEST_CONNECTION')) {
+                        updateStatus('ทดสอบการเชื่อมต่อ - สำเร็จ!', 'success');
+                        showDebug('ทดสอบการเชื่อมต่อสำเร็จ');
+                    }
+                }
+            } catch (error) {
+                console.error('Serial read error:', error);
+                updateStatus('ข้อผิดพลาดในการอ่านข้อมูล: ' + error.message, 'error');
+                showDebug('Serial Error: ' + error.message);
+            }
+        }
+        
+        // ปิดการเชื่อมต่อ
+        async function disconnectMicrobit() {
+            try {
+                isConnected = false;
+                if (reader) {
+                    await reader.cancel();
+                    reader = null;
+                }
+                if (port) {
+                    await port.close();
+                    port = null;
+                }
+                updateStatus('ตัดการเชื่อมต่อแล้ว', 'ready');
+            } catch (error) {
+                console.error('Disconnect error:', error);
+                updateStatus('ข้อผิดพลาดในการตัดการเชื่อมต่อ: ' + error.message, 'error');
+            }
+        }
+        
+        // เริ่มฟังเสียง
+        function startListening() {
+            const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+            
+            if (!SpeechRecognition) {
+                updateStatus('บราวเซอร์ไม่รองรับ Speech Recognition', 'error');
+                showDebug('Speech Recognition ไม่รองรับ - ใช้ Chrome แทน');
+                return;
+            }
+            
+            recognition = new SpeechRecognition();
+            recognition.lang = 'th-TH';
+            recognition.continuous = false;
+            recognition.interimResults = false;
+            
+            recognition.onstart = function() {
+                updateStatus('🎤 กำลังฟัง...', 'listening');
+            };
+            
+            recognition.onresult = function(event) {
+                const transcript = event.results[0][0].transcript;
+                showDebug('รับคำสั่งเสียง: ' + transcript);
+                document.getElementById('result').innerHTML = `<div class="result-box">คำสั่ง: "${transcript}"</div>`;
+                processVoiceCommand(transcript);
+            };
+            
+            recognition.onerror = function(event) {
+                console.error('Speech Recognition Error:', event.error);
+                updateStatus('เกิดข้อผิดพลาด: ' + event.error, 'error');
+                showDebug('Speech Error: ' + event.error);
+            };
+            
+            recognition.onend = function() {
+                updateStatus('พร้อมใช้งาน', 'ready');
+            };
+            
+            recognition.start();
+        }
+        
+        function stopListening() {
+            if (recognition) {
+                recognition.stop();
+            }
+        }
+        
+        // ประมวลผลคำสั่งเสียง
+        function processVoiceCommand(command) {
+            const eventData = parseCalendarCommand(command);
+            if (eventData) {
+                sendToZapier(eventData);
+            }
+        }
+        
+        // แปลงคำสั่งเป็นข้อมูลกิจกรรม
+        function parseCalendarCommand(command) {
+            console.log('Processing command:', command);
+            const lowerCommand = command.toLowerCase();
+            
+            let action = 'create';
+            let title = '';
+            let datetime = '';
+            let eventId = '';
+            let duration = 60;
+            
+            if (lowerCommand.includes('จด') || lowerCommand.includes('เพิ่ม') || 
+                lowerCommand.includes('นัดหมาย') || lowerCommand.includes('ประชุม')) {
+                
+                action = 'create';
+                title = extractEventTitle(lowerCommand);
+                const timeData = extractDateTime(lowerCommand);
+                datetime = timeData.datetime;
+                duration = timeData.duration;
+                
+            } else if (lowerCommand.includes('แก้ไข') || lowerCommand.includes('เปลี่ยน') ||
+                      lowerCommand.includes('ย้าย') || lowerCommand.includes('เลื่อน')) {
+                
+                action = 'update';
+                title = extractEventTitle(lowerCommand);
+                const timeData = extractDateTime(lowerCommand);
+                datetime = timeData.datetime;
+                
+            } else if (lowerCommand.includes('ลบ') || lowerCommand.includes('ยกเลิก') ||
+                      lowerCommand.includes('ไม่เอา')) {
+                
+                action = 'delete';
+                title = extractEventTitle(lowerCommand);
+                datetime = extractDateTime(lowerCommand).datetime;
+            }
+            
+            if (!title) {
+                title = 'งานสำคัญ';
+            }
+            
+            return {
+                action: action,
+                title: title,
+                datetime: datetime,
+                duration: duration,
+                event_id: eventId,
+                original_command: command,
+                timezone: 'Asia/Bangkok'
+            };
+        }
+        
+        // ฟังก์ชันหาชื่อกิจกรรม
+        function extractEventTitle(command) {
+            let title = '';
+            
+            const patterns = [
+                /เรื่อง\s*(.+?)(?=\s*(เวลา|วัน|พรุ่งนี้|วันนี้|$))/i,
+                /ประชุม\s*(.+?)(?=\s*(เวลา|วัน|พรุ่งนี้|วันนี้|$))/i,
+                /นัดหมาย\s*(.+?)(?=\s*(เวลา|วัน|พรุ่งนี้|วันนี้|$))/i,
+                /งาน\s*(.+?)(?=\s*(เวลา|วัน|พรุ่งนี้|วันนี้|$))/i,
+                /กิจกรรม\s*(.+?)(?=\s*(เวลา|วัน|พรุ่งนี้|วันนี้|$))/i
+            ];
+            
+            for (let pattern of patterns) {
+                const match = command.match(pattern);
+                if (match && match[1] && match[1].trim()) {
+                    title = match[1].trim();
+                    break;
+                }
+            }
+            
+            if (!title) {
+                if (command.includes('ประชุม')) title = 'ประชุม';
+                else if (command.includes('นัดหมาย')) title = 'นัดหมาย';
+                else if (command.includes('งาน')) title = 'งานสำคัญ';
+                else if (command.includes('เรียน')) title = 'เรียน';
+                else if (command.includes('ทำงาน')) title = 'ทำงาน';
+            }
+            
+            return title;
+        }
+        
+        // ดึงข้อมูลวันเวลา
+        function extractDateTime(command) {
+            const now = new Date();
+            let targetDate = new Date(now);
+            let duration = 60;
+            
+            if (command.includes('วันนี้')) {
+                targetDate = new Date(now);
+            } else if (command.includes('พรุ่งนี้')) {
+                targetDate.setDate(now.getDate() + 1);
+            } else if (command.includes('มะรืนนี้')) {
+                targetDate.setDate(now.getDate() + 2);
+            } else if (command.includes('สัปดาห์หน้า')) {
+                targetDate.setDate(now.getDate() + 7);
+            }
+            
+            const dayMap = {
+                'จันทร์': 1, 'วันจันทร์': 1,
+                'อังคาร': 2, 'วันอังคาร': 2,
+                'พุธ': 3, 'วันพุธ': 3,
+                'พฤหัสบดี': 4, 'พฤหัส': 4, 'วันพฤหัสบดี': 4,
+                'ศุกร์': 5, 'วันศุกร์': 5,
+                'เสาร์': 6, 'วันเสาร์': 6,
+                'อาทิตย์': 0, 'วันอาทิตย์': 0
+            };
+            
+            for (let [dayName, dayNum] of Object.entries(dayMap)) {
+                if (command.includes(dayName)) {
+                    const daysUntilTarget = (dayNum - now.getDay() + 7) % 7;
+                    if (daysUntilTarget === 0 && !command.includes('วันนี้')) {
+                        targetDate.setDate(now.getDate() + 7);
+                    } else {
+                        targetDate.setDate(now.getDate() + daysUntilTarget);
+                    }
+                    break;
+                }
+            }
+            
+            let hour = 9;
+            let minute = 0;
+            
+            const timePatterns = [
+                /(\d{1,2})[:.](\d{2})/g,
+                /(\d{1,2})\s*โมง\s*(\d{1,2})\s*นาที/g,
+                /(\d{1,2})\s*โมง\s*ครึ่ง/g,
+                /(\d{1,2})\s*โมง/g,
+                /(\d{1,2})\s*นาฬิกา/g,
+            ];
+            
+            for (let pattern of timePatterns) {
+                const matches = Array.from(command.matchAll(pattern));
+                if (matches.length > 0) {
+                    const match = matches[0];
+                    hour = parseInt(match[1]);
+                    
+                    if (match[2] !== undefined) {
+                        if (pattern.source.includes('ครึ่ง')) {
+                            minute = 30;
+                        } else {
+                            minute = parseInt(match[2]);
+                        }
+                    }
+                    break;
+                }
+            }
+            
+            if (command.includes('เช้า') && hour > 12) {
+                hour = hour - 12;
+            } else if (command.includes('บ่าย') || command.includes('เย็น')) {
+                if (hour < 12 && hour !== 0) {
+                    hour = hour + 12;
+                }
+            } else if (command.includes('ค่ำ') || command.includes('กลางคืน')) {
+                if (hour < 12) {
+                    hour = hour + 12;
+                }
+            }
+            
+            if (command.includes('1 ชั่วโมง') || command.includes('ชั่วโมง')) {
+                duration = 60;
+            } else if (command.includes('30 นาที') || command.includes('ครึ่งชั่วโมง')) {
+                duration = 30;
+            } else if (command.includes('2 ชั่วโมง')) {
+                duration = 120;
+            }
+            
+            const durationMatch = command.match(/(\d+)\s*นาที/);
+            if (durationMatch) {
+                duration = parseInt(durationMatch[1]);
+            }
+            
+            targetDate.setHours(hour, minute, 0, 0);
+            
+            return {
+                datetime: targetDate.toISOString(),
+                duration: duration
+            };
+        }
+        
+        // ส่งข้อมูลไปยัง Zapier (แก้ไขปัญหา no-cors)
+        async function sendToZapier(eventData) {
+            const webhookUrls = {
+                'create': 'https://hooks.zapier.com/hooks/catch/24425708/uhfcmta/',
+                'update': 'https://hooks.zapier.com/hooks/catch/24425708/uhf032l/', 
+                'delete': 'https://hooks.zapier.com/hooks/catch/24425708/uhfpkrz/'
+            };
+            
+            const webhookUrl = webhookUrls[eventData.action];
+            
+            if (!webhookUrl) {
+                updateStatus('ไม่รองรับการกระทำนี้', 'error');
+                return;
+            }
+            
+            const zapierData = {
+                action: eventData.action,
+                title: eventData.title,
+                start_datetime: eventData.datetime,
+                end_datetime: calculateEndDateTime(eventData.datetime, eventData.duration),
+                timezone: eventData.timezone || 'Asia/Bangkok',
+                description: `สร้างโดยคำสั่งเสียง: "${eventData.original_command}"`,
+                duration_minutes: eventData.duration,
+                event_id: eventData.event_id,
+                search_title: eventData.title,
+                search_date: eventData.datetime.split('T')[0]
+            };
+            
+            try {
+                updateStatus(`กำลัง${getActionText(eventData.action)}...`, 'listening');
+                showDebug('ส่งข้อมูลไป Zapier: ' + JSON.stringify(zapierData, null, 2));
+                
+                // ใช้ no-cors mode เหมือนกับปุ่มทดสอบ
+                const response = await fetch(webhookUrl, {
+                    method: 'POST',
+                    mode: 'no-cors',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify(zapierData)
+                });
+                
+                // แสดงผลลัพธ์
+                const actionText = getActionText(eventData.action);
+                updateStatus(`${actionText}สำเร็จ! "${eventData.title}"`, 'success');
+                
+                const datetime = new Date(eventData.datetime);
+                const displayTime = datetime.toLocaleString('th-TH', {
+                    timeZone: 'Asia/Bangkok',
+                    year: 'numeric',
+                    month: 'long',
+                    day: 'numeric',
+                    hour: '2-digit',
+                    minute: '2-digit'
+                });
+                
+                document.getElementById('result').innerHTML = `
+                    <div class="result-box">
+                        <h4>✅ ${actionText}สำเร็จ!</h4>
+                        <strong>ชื่อกิจกรรม:</strong> ${eventData.title}<br>
+                        <strong>วันเวลา:</strong> ${displayTime}<br>
+                        <strong>ระยะเวลา:</strong> ${eventData.duration} นาที<br>
+                        <strong>คำสั่ง:</strong> "${eventData.original_command}"
+                    </div>
+                `;
+                
+                // แสดงข้อมูลที่ส่งใน debug แบบเดียวกับปุ่มทดสอบ
+                showDebug('ส่งข้อมูลแล้ว (no-cors mode): ' + JSON.stringify(zapierData, null, 2));
+                
+            } catch (error) {
+                console.error('Error sending to Zapier:', error);
+                updateStatus('ไม่สามารถเชื่อมต่อกับ Zapier ได้: ' + error.message, 'error');
+                showDebug('Zapier Error: ' + error.message + '\nURL: ' + webhookUrl + '\nData: ' + JSON.stringify(zapierData, null, 2));
+                
+                // แสดงวิธีแก้ไขเพิ่มเติม
+                document.getElementById('result').innerHTML = `
+                    <div class="result-box" style="background: #ffebee; border-left-color: #f44336;">
+                        <h4>❌ เกิดข้อผิดพลาด</h4>
+                        <p><strong>สาเหตุ:</strong> ${error.message}</p>
+                        <p><strong>ข้อมูลที่ส่ง:</strong></p>
+                        <pre style="background: #f5f5f5; padding: 10px; border-radius: 4px; font-size: 12px;">${JSON.stringify(zapierData, null, 2)}</pre>
+                        <p><strong>วิธีแก้ไข:</strong></p>
+                        <ul>
+                            <li>ตรวจสอบ Internet connection</li>
+                            <li>ตรวจสอบ Zapier Webhook URLs</li>
+                            <li>ลองใช้ปุ่ม "ทดสอบ Zapier" เปรียบเทียบ</li>
+                            <li>ตรวจสอบว่า Zap ใน Zapier เปิดใช้งานอยู่</li>
+                        </ul>
+                    </div>
+                `;
+            }
+        }
+        
+        // คำนวณเวลาสิ้นสุด
+        function calculateEndDateTime(startDateTime, durationMinutes) {
+            const endDate = new Date(startDateTime);
+            endDate.setMinutes(endDate.getMinutes() + durationMinutes);
+            return endDate.toISOString();
+        }
+        
+        // แปลง action เป็นข้อความไทย
+        function getActionText(action) {
+            const actionMap = {
+                'create': 'สร้างกิจกรรม',
+                'update': 'แก้ไขกิจกรรม', 
+                'delete': 'ลบกิจกรรม'
+            };
+            return actionMap[action] || 'ดำเนินการ';
+        }
+        
+        // ตรวจสอบสถานะเครือข่าย
+        function checkNetworkStatus() {
+            if (!navigator.onLine) {
+                updateStatus('ไม่มีการเชื่อมต่ออินเทอร์เน็ต', 'error');
+                return false;
+            }
+            return true;
+        }
+        
+        // เริ่มต้นเมื่อหน้าเว็บโหลดเสร็จ
+        window.addEventListener('load', function() {
+            showDebug('ระบบพร้อมใช้งาน');
+            
+            // ตรวจสอบการรองรับ APIs
+            const support = {
+                'Web Serial': 'serial' in navigator,
+                'Speech Recognition': !!(window.SpeechRecognition || window.webkitSpeechRecognition),
+                'Fetch API': 'fetch' in window
+            };
+            
+            let supportInfo = 'การรองรับ Browser APIs:<br>';
+            for (let [api, supported] of Object.entries(support)) {
+                supportInfo += `${api}: ${supported ? '✅ รองรับ' : '❌ ไม่รองรับ'}<br>`;
+            }
+            
+            showDebug(supportInfo);
+        });
+    </script>
+</body>
+</html>
