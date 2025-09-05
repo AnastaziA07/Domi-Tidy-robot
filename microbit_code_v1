@@ -1,0 +1,136 @@
+// ตั้งค่าเริ่มต้น
+let isListening = false
+let soundLevel = 0
+let voiceDetected = false
+let recordingTime = 0
+
+// เริ่มต้นโปรแกรม
+basic.showString("READY")
+serial.setBaudRate(BaudRate.BaudRate115200)
+
+// ฟังก์ชันเริ่มฟังเสียง - ปุ่ม A
+input.onButtonPressed(Button.A, function () {
+    if (!isListening) {
+        isListening = true
+        voiceDetected = false
+        recordingTime = 0
+
+        basic.showIcon(IconNames.Duck)
+
+        // ส่งสัญญาณไปยังคอมพิวเตอร์
+        serial.writeLine("START_LISTENING")
+        basic.pause(500)
+
+        // แสดงการนับถอยหลัง
+        for (let count = 5; count >= 1; count--) {
+            basic.showNumber(count)
+            basic.pause(1000)
+        }
+
+        // เริ่มฟังเสียงจริง
+        basic.showIcon(IconNames.Duck)
+
+        // ฟังเสียงเป็นเวลา 10 วินาที
+        for (let i = 0; i < 50; i++) {
+            soundLevel = input.soundLevel()
+
+            // ถ้าเสียงดังพอ (ปรับค่าตามต้องการ)
+            if (soundLevel > 120) {
+                voiceDetected = true
+                basic.showIcon(IconNames.Duck) // แสดงว่ากำลังได้ยินเสียง
+                recordingTime = recordingTime + 1
+            } else {
+                basic.showIcon(IconNames.Duck) // แสดงว่ากำลังฟัง
+            }
+
+            basic.pause(200) // ฟังทุก 0.2 วินาที
+        }
+
+        // ส่งสัญญาณหยุดฟัง
+        serial.writeLine("STOP_LISTENING")
+
+        if (voiceDetected) {
+            basic.showIcon(IconNames.Yes)
+            // ส่งข้อมูลเพิ่มเติม
+            serial.writeLine("VOICE_DETECTED:TRUE")
+        } else {
+            basic.showIcon(IconNames.No)
+            serial.writeLine("VOICE_DETECTED:FALSE")
+        }
+
+        basic.pause(1500)
+        isListening = false
+        basic.showIcon(IconNames.Happy)
+    }
+})
+
+// ปุ่ม B สำหรับยกเลิก
+input.onButtonPressed(Button.B, function () {
+    serial.writeLine("CANCEL")
+    basic.showIcon(IconNames.No)
+    basic.pause(1000)
+    basic.showIcon(IconNames.Happy)
+    isListening = false
+})
+
+// ปุ่ม A+B สำหรับทดสอบการเชื่อมต่อ
+input.onButtonPressed(Button.AB, function () {
+    serial.writeLine("TEST_CONNECTION")
+    basic.showString("TEST")
+    basic.pause(1000)
+    basic.showIcon(IconNames.Happy)
+})
+
+// แสดงระดับเสียงตลอดเวลา (เมื่อไม่ได้ฟัง)
+basic.forever(function () {
+    if (!isListening) {
+        soundLevel = input.soundLevel()
+
+        // แสดงระดับเสียงเป็นแถบ LED
+        if (soundLevel > 200) {
+            basic.showLeds(`
+                # # # # #
+                # # # # #
+                # # # # #
+                # # # # #
+                # # # # #
+                `)
+        } else if (soundLevel > 150) {
+            basic.showLeds(`
+                . . . . .
+                # # # # #
+                # # # # #
+                # # # # #
+                # # # # #
+                `)
+        } else if (soundLevel > 100) {
+            basic.showLeds(`
+                . . . . .
+                . . . . .
+                # # # # #
+                # # # # #
+                # # # # #
+                `)
+        } else if (soundLevel > 50) {
+            basic.showLeds(`
+                . . . . .
+                . . . . .
+                . . . . .
+                # # # # #
+                # # # # #
+                `)
+        } else {
+            basic.showIcon(IconNames.Happy)
+        }
+
+        basic.pause(100)
+    }
+})
+
+// ส่งข้อมูลระดับเสียงทุก 2 วินาที
+basic.forever(function () {
+    if (!isListening) {
+        serial.writeLine("SOUND_LEVEL:" + soundLevel)
+        basic.pause(2000)
+    }
+})
